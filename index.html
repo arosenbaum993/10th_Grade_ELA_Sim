@@ -1455,51 +1455,52 @@
       return null;
     }
 
-    async function submitResults(results) {
-      const payload = {
-        simulation: simulation.meta.title,
-        version: simulation.meta.version,
-        student_name: results.studentName,
-        period: results.period,
-        teacher: results.teacher,
-        overall_score: results.overallScore,
-        possible_score: results.possibleScore,
-        percent: results.percent,
-        achievement_level: results.achievementLevel,
-        correct_items: results.correctItems.join(', '),
-        correct_item_count: results.correctItemCount,
-        item_count: results.itemCount,
-        vocabulary_flags: results.vocabularyFlags.join(', '),
-        domain_breakdown_json: JSON.stringify(results.domainBreakdown),
-        per_item_json: JSON.stringify(results.perItem),
-        submitted_at: results.submittedAt,
-        practice_estimate: true
-      };
+   async function submitResults(results) {
+  const params = new URLSearchParams({
+    simulation: simulation.meta.title,
+    version: simulation.meta.version,
+    student_name: results.studentName,
+    period: results.period,
+    teacher: results.teacher,
+    overall_score: String(results.overallScore),
+    possible_score: String(results.possibleScore),
+    percent: String(results.percent),
+    achievement_level: results.achievementLevel,
+    correct_items: results.correctItems.join(', '),
+    correct_item_count: String(results.correctItemCount),
+    item_count: String(results.itemCount),
+    vocabulary_flags: results.vocabularyFlags.join(', '),
+    domain_breakdown_json: JSON.stringify(results.domainBreakdown),
+    per_item_json: JSON.stringify(results.perItem),
+    submitted_at: results.submittedAt,
+    practice_estimate: 'true'
+  });
 
-      try {
-        const response = await fetch(APPS_SCRIPT_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
+  try {
+    const response = await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      body: params
+    });
 
-        const responseText = await response.text();
-        let json = null;
-        try {
-          json = JSON.parse(responseText);
-        } catch (err) {
-          throw new Error('Could not parse Apps Script response: ' + responseText);
-        }
+    const responseText = await response.text();
+    let json = null;
 
-        if (!response.ok || !json || json.status !== 'ok') {
-          throw new Error((json && json.message) ? json.message : 'Submission failed.');
-        }
+    try {
+      json = JSON.parse(responseText);
+    } catch (err) {
+      throw new Error('Could not parse Apps Script response: ' + responseText);
+    }
 
-        return { ok: true, payload: json };
-      } catch (err) {
-        console.error('Submission failed:', err);
-        return { ok: false, error: String(err) };
-      }
+    if (!response.ok || !json || json.status !== 'ok') {
+      throw new Error((json && json.message) ? json.message : 'Submission failed.');
+    }
+
+    return { ok: true, payload: json };
+  } catch (err) {
+    console.error('Submission failed:', err);
+    return { ok: false, error: String(err) };
+  }
+}
     }
 
     function renderAiFeedbackHtml(results) {
