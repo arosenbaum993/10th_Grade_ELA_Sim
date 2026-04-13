@@ -1388,7 +1388,7 @@
         domainBreakdown[item.domain].earned += points;
         domainBreakdown[item.domain].possible += item.points;
         earned += points;
-        perItem.push({ itemNumber: idx + 1, itemId: item.id, pointsEarned: points, pointsPossible: item.points, correct });
+        perItem.push({ itemNumber: idx + 1, itemId: item.id, type: item.type, itemType: item.type, pointsEarned: points, pointsPossible: item.points, correct, response: item.type === 'essay' ? (response || '') : null });
       });
       const pct = possible ? (earned / possible) * 100 : 0;
       const band = SCORE_BANDS.find(b => pct >= b.min && pct <= b.max) || SCORE_BANDS[0];
