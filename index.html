@@ -1424,227 +1424,133 @@
       }
       clearInterval(timerInterval);
 
-      // Show a loading state while AI scores the essay
       document.getElementById('app').classList.add('hidden');
       document.getElementById('resultsScreen').classList.remove('hidden');
       document.getElementById('resultsScreen').innerHTML = `
         <div class="ai-loading" style="padding:40px; font-size:16px;">
           <div class="ai-loading-spinner"></div>
-          <div>Scoring your written response with AI feedback... this takes about 10 seconds.</div>
+          <div>Submitting your work and generating AI writing feedback...</div>
         </div>
       `;
-
-      // Run AI essay scoring before scoring the rest
-      await runAiEssayScoring();
 
       const results = scoreSimulation();
       state.submitted = true;
       saveState();
+
+      const submission = await submitResults(results);
+      results.serverFeedback = submission && submission.ok ? submission.payload : null;
+
       localStorage.setItem(RESULTS_KEY, JSON.stringify(results));
-      const submitted = await submitResults(results);
-      state.submissionStatus = submitted ? 'submitted' : 'submission_failed';
+      state.submissionStatus = submission && submission.ok ? 'submitted' : 'submission_failed';
       saveState();
-      renderResults(results, submitted);
+      renderResults(results, submission && submission.ok);
     }
 
     // -----------------------------------------------------------------------
     // AI ESSAY SCORING
-    // Calls Claude via the Cloudflare proxy, scores all three Milestones
-    // rubric traits (Purpose & Organization, Evidence & Elaboration,
-    // Language & Conventions) 0-4 each, max total = 4 (averaged).
-    // Stores scores and feedback on state.essayAiScore / state.essayAiFeedback.
+    // Feedback now comes from the Apps Script endpoint after submission.
+    // This function remains only for compatibility with older saved states.
     // -----------------------------------------------------------------------
-    const PROXY_URL = 'https://anthropic-proxy.arosenbaum.workers.dev';
-
     async function runAiEssayScoring() {
-      const essayItem = simulation.items.find(i => i.type === 'essay');
-      if (!essayItem) return;
-
-      const essayText = state.answers[essayItem.id] || '';
-      if (!essayText.trim()) {
-        state.essayAiScore = { [essayItem.id]: 0 };
-        state.essayAiFeedback = { [essayItem.id]: { error: 'No response submitted.' } };
-        return;
-      }
-
-      // Build source summaries for context
-      const src1 = simulation.items.find(i => i.id === 'Q13');
-      const src2 = simulation.items.find(i => i.id === 'Q14');
-      const src3 = simulation.items.find(i => i.id === 'Q15');
-      const sourceContext = [
-        src1 ? 'Source 1 (Transcript): ' + src1.passage.slice(0, 600) + '...' : '',
-        src2 ? 'Source 2 (Article): ' + src2.passage.slice(0, 600) + '...' : '',
-        src3 ? 'Source 3 (Article): ' + src3.passage.slice(0, 600) + '...' : '',
-      ].filter(Boolean).join('\n\n');
-
-      const systemPrompt = `You are an expert Georgia Milestones ELA rubric scorer for grade 10 argumentative writing. You score student essays using the official three-trait rubric. Be honest, specific, and constructive. Never inflate scores. Return ONLY valid JSON.`;
-
-      const userPrompt = `Score the following 10th grade argumentative essay using the Georgia Milestones three-trait rubric. The writing task asked students to argue whether Georgia should require updated energy efficiency standards, using evidence from three sources.
-
-SOURCES PROVIDED TO STUDENT (summarized):
-${sourceContext}
-
-RESEARCH QUESTION: Should Georgia require homeowners and builders to meet updated energy efficiency standards?
-
-STUDENT ESSAY:
-${essayText}
-
-Score each trait from 0 to 4 using these criteria:
-
-TRAIT 1 - Purpose and Organization (0-4):
-4 = Strong introduction establishing claim, effective organization, consistent appropriate style/tone, varied transitions, strong conclusion
-3 = Adequate introduction, mostly effective organization, generally appropriate style, adequate transitions, satisfactory conclusion
-2 = Weak or unclear introduction, inconsistent organization, style shifts, limited transitions, weak conclusion
-1 = Minimal evidence of organization, unclear claim, inappropriate style, few or no transitions
-0 = No response or off-topic
-
-TRAIT 2 - Evidence and Elaboration (0-4):
-4 = Effective use of evidence from multiple sources, strong elaboration with rhetorical techniques/appeals, sources credited
-3 = Adequate evidence from sources, some elaboration, sources generally credited
-2 = Limited evidence, minimal elaboration, sources partially used
-1 = Little or no evidence from sources, no elaboration
-0 = No response or off-topic
-
-TRAIT 3 - Language and Conventions (0-4):
-4 = Varied syntax, correct verb tense/aspect/mood, effective parallel structure, few or no errors
-3 = Some sentence variety, mostly correct conventions, minor errors that do not interfere
-2 = Limited variety, several errors that occasionally interfere with meaning
-1 = Frequent errors that interfere significantly with meaning
-0 = No response or incomprehensible
-
-For each trait, also provide:
-- "strengths": 1-2 specific sentences about what the student did well (cite specific examples from their writing)
-- "improvements": 1-2 specific, actionable sentences about what to fix (be direct, not vague)
-
-Return ONLY this JSON structure, no other text:
-{
-  "trait1": { "score": 0, "strengths": "", "improvements": "" },
-  "trait2": { "score": 0, "strengths": "", "improvements": "" },
-  "trait3": { "score": 0, "strengths": "", "improvements": "" },
-  "overall_comment": ""
-}`;
-
-      try {
-        const response = await fetch(PROXY_URL + '/v1/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 1000,
-            system: systemPrompt,
-            messages: [{ role: 'user', content: userPrompt }]
-          })
-        });
-
-        const data = await response.json();
-        const rawText = data.content && data.content[0] && data.content[0].text || '';
-
-        // Strip any accidental markdown fences
-        const clean = rawText.replace(/```json|```/g, '').trim();
-        const scored = JSON.parse(clean);
-
-        // Total score = average of three traits, rounded, max 4
-        const total = Math.round((scored.trait1.score + scored.trait2.score + scored.trait3.score) / 3);
-
-        state.essayAiScore = { [essayItem.id]: Math.min(total, essayItem.points) };
-        state.essayAiFeedback = { [essayItem.id]: scored };
-
-      } catch (err) {
-        console.error('AI essay scoring failed:', err);
-        // Fall back to word count -- essayAiScore stays undefined, scoreSimulation handles it
-        state.essayAiScore = {};
-        state.essayAiFeedback = { [essayItem.id]: { error: 'AI scoring unavailable. Score estimated by word count.' } };
-      }
+      return null;
     }
 
     async function submitResults(results) {
-      // Send as URL-encoded form data -- no custom Content-Type header means no
-      // CORS preflight, and the browser follows the Apps Script redirect correctly.
-      // doPost on the Apps Script side reads e.parameter (not e.postData.contents).
-      const params = new URLSearchParams({
-        simulation:            simulation.meta.title,
-        version:               simulation.meta.version,
-        student_name:          results.studentName,
-        period:                results.period,
-        teacher:               results.teacher,
-        overall_score:         String(results.overallScore),
-        possible_score:        String(results.possibleScore),
-        percent:               String(results.percent),
-        achievement_level:     results.achievementLevel,
-        correct_items:         results.correctItems.join(', '),
-        correct_item_count:    String(results.correctItemCount),
-        item_count:            String(results.itemCount),
-        vocabulary_flags:      results.vocabularyFlags.join(', '),
+      const payload = {
+        simulation: simulation.meta.title,
+        version: simulation.meta.version,
+        student_name: results.studentName,
+        period: results.period,
+        teacher: results.teacher,
+        overall_score: results.overallScore,
+        possible_score: results.possibleScore,
+        percent: results.percent,
+        achievement_level: results.achievementLevel,
+        correct_items: results.correctItems.join(', '),
+        correct_item_count: results.correctItemCount,
+        item_count: results.itemCount,
+        vocabulary_flags: results.vocabularyFlags.join(', '),
         domain_breakdown_json: JSON.stringify(results.domainBreakdown),
-        per_item_json:         JSON.stringify(results.perItem),
-        submitted_at:          results.submittedAt,
-        practice_estimate:     'true',
-        essay_ai_score:        results.essayAiScore !== undefined ? String(results.essayAiScore) : '',
-        essay_ai_feedback:     results.essayAiFeedback ? JSON.stringify(results.essayAiFeedback) : ''
-      });
+        per_item_json: JSON.stringify(results.perItem),
+        submitted_at: results.submittedAt,
+        practice_estimate: true
+      };
+
       try {
-        // mode: no-cors is intentional -- form POST to Apps Script does not need
-        // the response body. The request fires and completes; the opaque response
-        // just means we cannot inspect it, which is fine.
-        await fetch(APPS_SCRIPT_URL, {
+        const response = await fetch(APPS_SCRIPT_URL, {
           method: 'POST',
-          body: params,
-          mode: 'no-cors'
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
         });
-        return true;
+
+        const responseText = await response.text();
+        let json = null;
+        try {
+          json = JSON.parse(responseText);
+        } catch (err) {
+          throw new Error('Could not parse Apps Script response: ' + responseText);
+        }
+
+        if (!response.ok || !json || json.status !== 'ok') {
+          throw new Error((json && json.message) ? json.message : 'Submission failed.');
+        }
+
+        return { ok: true, payload: json };
       } catch (err) {
-        return false;
+        console.error('Submission failed:', err);
+        return { ok: false, error: String(err) };
       }
     }
 
     function renderAiFeedbackHtml(results) {
-      const fb = results.essayAiFeedback;
+      const server = results.serverFeedback || {};
+      const fb = server.ai_feedback || null;
       if (!fb) return '';
 
-      if (fb.error) {
-        return `<div class="ai-scoring-wrap"><h3>Extended Writing Task — AI Feedback</h3>
-          <div class="banner">${escapeHtml(fb.error)}</div></div>`;
-      }
+      const traitScores = fb.trait_scores || {};
+      const cards = [
+        { name: 'Purpose and Organization', score: traitScores.purpose_organization },
+        { name: 'Evidence and Elaboration', score: traitScores.evidence_elaboration },
+        { name: 'Language and Conventions', score: traitScores.language_conventions }
+      ].map(t => `
+        <div class="rubric-trait">
+          <div class="rubric-trait-header">
+            <span class="rubric-trait-name">${escapeHtml(t.name)}</span>
+            <span class="rubric-trait-score">${t.score == null ? '—' : t.score} / 4</span>
+          </div>
+        </div>
+      `).join('');
 
-      const traitNames = {
-        trait1: 'Trait 1: Purpose and Organization',
-        trait2: 'Trait 2: Evidence and Elaboration',
-        trait3: 'Trait 3: Language and Conventions'
-      };
+      const strengths = (fb.strengths || []).length
+        ? `<ul class="compact">${fb.strengths.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`
+        : '<div class="small">No strengths returned.</div>`;
 
-      const totalScore = results.essayAiScore !== null ? results.essayAiScore : '—';
-
-      const traitCards = ['trait1','trait2','trait3'].map(key => {
-        const t = fb[key];
-        if (!t) return '';
-        return `
-          <div class="rubric-trait">
-            <div class="rubric-trait-header">
-              <span class="rubric-trait-name">${escapeHtml(traitNames[key])}</span>
-              <span class="rubric-trait-score">${t.score} / 4</span>
-            </div>
-            <div class="rubric-trait-feedback">
-              ${t.strengths ? `<p><strong>Strengths:</strong> ${escapeHtml(t.strengths)}</p>` : ''}
-              ${t.improvements ? `<p><em>To improve:</em> ${escapeHtml(t.improvements)}</p>` : ''}
-            </div>
-          </div>`;
-      }).join('');
+      const nextSteps = (fb.next_steps || []).length
+        ? `<ul class="compact">${fb.next_steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`
+        : '<div class="small">No next steps returned.</div>';
 
       return `
         <div class="ai-scoring-wrap">
           <h3>Extended Writing Task — AI Feedback</h3>
           <div class="ai-score-summary">
-            <div>
-              <div class="ai-score-label">AI Score</div>
-              <div class="ai-score-total">${totalScore} / 4</div>
-            </div>
             <div style="flex:1; font-size:14px; line-height:1.6;">
-              ${fb.overall_comment ? escapeHtml(fb.overall_comment) : ''}
+              ${fb.overall_feedback ? escapeHtml(fb.overall_feedback) : 'No feedback returned.'}
             </div>
           </div>
-          <div class="rubric-trait-grid">${traitCards}</div>
+          <div class="rubric-trait-grid">${cards}</div>
+          <div class="score-grid" style="margin-top:14px;">
+            <div class="score-card">
+              <div class="small">Strengths</div>
+              ${strengths}
+            </div>
+            <div class="score-card">
+              <div class="small">Next steps</div>
+              ${nextSteps}
+            </div>
+          </div>
+          ${fb.teacher_summary ? `<div class="score-card" style="margin-top:12px;"><div class="small">Teacher summary</div><div style="margin-top:8px; line-height:1.6;">${escapeHtml(fb.teacher_summary)}</div></div>` : ''}
           <div class="ai-disclaimer">
-            AI feedback is for practice purposes only. Scores reflect alignment with Georgia Milestones rubric criteria and should not be treated as official grades. Your teacher may review and adjust scores.
+            AI feedback is for practice purposes only. It is not an official Georgia Milestones score.
           </div>
         </div>`;
     }
@@ -1662,7 +1568,7 @@ Return ONLY this JSON structure, no other text:
           <div class="score-card"><div class="small">Achievement level</div><div style="margin-top:8px;"><span class="pill ${results.achievementClass}">${escapeHtml(results.achievementLevel)}</span></div></div>
           <div class="score-card"><div class="small">Correct items</div><div class="score-big">${results.correctItemCount} / ${results.itemCount}</div></div>
         </div>
-        <div class="banner">Results submitted to your teacher's gradebook. Download the results file below for your records.</div>
+        <div class="banner">${submitted ? 'Results submitted and AI feedback returned successfully.' : 'Results were scored locally, but submission or AI feedback failed. Check the Apps Script deployment URL and API key.'} Download the results file below for your records.</div>
         <h3>Domain breakdown</h3>
         <div class="score-grid">
           ${Object.entries(results.domainBreakdown).map(([domain, data]) => `<div class="score-card"><div class="small">${escapeHtml(domain)}</div><div class="score-big">${data.earned} / ${data.possible}</div><div class="small">${data.possible ? Math.round((data.earned/data.possible)*100) : 0}%</div></div>`).join('')}
