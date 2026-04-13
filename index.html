@@ -1523,11 +1523,11 @@
 
       const strengths = (fb.strengths || []).length
         ? `<ul class="compact">${fb.strengths.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`
-        : '<div class="small">No strengths returned.</div>`;
+        : `<div class="small">No strengths returned.</div>`;
 
       const nextSteps = (fb.next_steps || []).length
         ? `<ul class="compact">${fb.next_steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`
-        : '<div class="small">No next steps returned.</div>';
+        : `<div class="small">No next steps returned.</div>`;
 
       return `
         <div class="ai-scoring-wrap">
